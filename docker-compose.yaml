@@ -1,0 +1,100 @@
+# Extension fields
+# https://docs.docker.com/compose/compose-file/#extension-fields
+version: '3.7'
+
+networks:
+  kong-net:
+    
+x-logging:
+  &default-logging
+  driver: json-file
+  options:
+    max-size: "100m"
+    max-file: "5"
+
+services:
+  #######################################
+  # Kong: The API Gateway
+  #######################################
+  kong:
+    image: "kong:${KONG_VERSION:-latest}"
+    platform: linux/amd64
+    restart: always
+    user: "${KONG_USER:-root}"
+    env_file:
+      - ./env/pg.env
+      - ./env/kong.env
+      - ./env/nginx.env
+    logging: *default-logging
+    healthcheck:
+      test: ["CMD", "kong", "health"]
+      interval: 15s
+      timeout: 5s
+      retries: 2
+    ports:
+      - "80:80"
+      - "443:443"
+      - "8001:8001"
+    networks:
+      - kong-net
+    depends_on:
+      - kong-migrations
+  #######################################
+  # Konga: Kong GUI
+  #######################################  
+  konga:
+    image: pantsel/konga
+    platform: linux/amd64
+    restart: always
+    user: "${KONG_USER:-root}"
+    networks:
+      - kong-net  
+    env_file:
+      - ./env/konga.env
+    ports:
+      - "8080:1337"
+    volumes:
+      - ./konga_data:/app/kongadata
+    logging: *default-logging
+  #######################################
+  # Kong database
+  #######################################      
+  kong-database:
+    image: postgres:15
+    platform: linux/amd64
+    restart: on-failure
+    networks:
+      - kong-net
+    volumes:
+      - ./pgsql:/var/lib/postgresql/data
+    env_file:
+      - ./env/pg.env
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "pg_isready",
+          "-d",
+          "${KONG_PG_DATABASE:-kong}",
+          "-U",
+          "${KONG_PG_USER:-kong}"
+        ]
+      interval: 30s
+      timeout: 30s
+      retries: 3
+  #######################################
+  # Kong database migration
+  #######################################     
+  kong-migrations:
+    image: "kong:${KONG_VERSION:-latest}"
+    platform: linux/amd64
+    command: kong migrations bootstrap
+    restart: on-failure 
+    env_file:
+      - ./env/pg.env
+    networks:
+      - kong-net  
+    depends_on:
+      - kong-database
